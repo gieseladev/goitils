@@ -32,5 +32,5 @@ func main() {
 	conf := gitils.NewConfig()
 	rawConf.Scan(&conf)
 
-	gitils.Start(conf)
+	log.Fatal(gitils.Start(conf))
 }
