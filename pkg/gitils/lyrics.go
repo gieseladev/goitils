@@ -9,34 +9,46 @@ import (
 	"github.com/gieseladev/lyricsfindergo/pkg/models"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/render"
+	log "github.com/sirupsen/logrus"
 )
 
 type StoredLyrics struct {
-	Query string
-	Url   string `sql:",pk"`
-	Title,
-	Artist,
-	Lyrics string
-	ReleaseData time.Time
-	OriginName,
-	OriginUrl string
+	Query       string    `json:"-"`
+	Url         string    `json:"url" sql:",pk"`
+	Title       string    `json:"title"`
+	Artist      string    `json:"artist"`
+	Lyrics      string    `json:"lyrics"`
+	ReleaseDate time.Time `json:"release_date"`
+	OriginName  string    `json:"source_name"`
+	OriginUrl   string    `json:"source_url"`
 }
 
-func findCachedLyrics(query string) (*StoredLyrics, error) {
+func findStoredLyrics(query string) (*StoredLyrics, error) {
 	lyrics := new(StoredLyrics)
+
 	err := db.Model(lyrics).
-		Where("query LIKE ?", query).
-		WhereOr("artist || '-' || title LIKE ?", query).
+		Where("query @@ plainto_tsquery(?)", query).
+		WhereOr("artist || ' ' || title @@ plainto_tsquery(?)", query).
 		Limit(1).
 		Select()
 
 	if err != nil {
+		log.Warningf("Couldn't find stored lyrics: %v", err)
 		return nil, err
 	} else if *lyrics == (StoredLyrics{}) {
 		return nil, errors.New("no lyrics found in db")
 	}
 
 	return lyrics, nil
+}
+
+func storeLyrics(lyrics *StoredLyrics) {
+	_, err := db.Model(lyrics).
+		OnConflict("(url) DO NOTHING").
+		Insert()
+	if err != nil {
+		log.Warning(err)
+	}
 }
 
 func searchLyrics(searchQuery string) (*StoredLyrics, error) {
@@ -58,7 +70,7 @@ func searchLyrics(searchQuery string) (*StoredLyrics, error) {
 	storedLyrics.Artist = lyrics.Artist
 	storedLyrics.Lyrics = lyrics.Lyrics
 
-	storedLyrics.ReleaseData = lyrics.ReleaseDate
+	storedLyrics.ReleaseDate = lyrics.ReleaseDate
 
 	storedLyrics.OriginName = lyrics.Origin.Name
 	storedLyrics.OriginUrl = lyrics.Origin.Url
@@ -69,13 +81,15 @@ func searchLyrics(searchQuery string) (*StoredLyrics, error) {
 func getLyrics(w http.ResponseWriter, r *http.Request) {
 	searchQuery := chi.URLParam(r, "query")
 
-	lyrics, err := findCachedLyrics(searchQuery)
+	lyrics, err := findStoredLyrics(searchQuery)
 	if err != nil {
+		log.Debugf("Searching lyrics for: %s", searchQuery)
 		lyrics, err = searchLyrics(searchQuery)
-		defer db.Insert(lyrics)
+		defer storeLyrics(lyrics)
 	}
 
 	if lyrics == nil || *lyrics == (StoredLyrics{}) {
+		log.Warningf("No lyrics found: %v for query: %q", err, searchQuery)
 		http.Error(w, "No lyrics found", 404)
 		return
 	}

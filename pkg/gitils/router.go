@@ -1,8 +1,9 @@
 package gitils
 
 import (
-	"log"
 	"net/http"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
@@ -29,11 +30,32 @@ func AllRoutes() *chi.Mux {
 	return router
 }
 
+func setupDatabase() error {
+	log.Info("Preparing Database")
+	orm.SetTableNameInflector(func(s string) string {
+		return "gitils." + inflection.Plural(s)
+	})
+
+	opt := &orm.CreateTableOptions{
+		IfNotExists: true,
+	}
+
+	log.Trace("Creating lyrics table")
+	err := db.CreateTable(new(StoredLyrics), opt)
+
+	if err == nil {
+		_, err = db.Exec("CREATE INDEX IF NOT EXISTS query_search ON gitils.stored_lyrics USING GIN (to_tsvector('english', query))")
+	}
+
+	return err
+}
+
 func serve() error {
 	router := AllRoutes()
 
+	log.Debug("Routes:")
 	err := chi.Walk(router, func(method string, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		log.Printf("%s %s\n", method, route)
+		log.Debugf("%s %q", method, route)
 		return nil
 	})
 	if err != nil {
@@ -41,7 +63,7 @@ func serve() error {
 	}
 
 	defer shutdown()
-	log.Println("GiTils listening on", config.Address)
+	log.Infof("GiTils listening on %q", config.Address)
 	return http.ListenAndServe(config.Address, router)
 }
 
@@ -53,7 +75,7 @@ func shutdown() {
 
 func Start(conf Config) error {
 	config = conf
-	log.Println("Using Config", config)
+	log.Tracef("Using Config: %+v", config)
 
 	options, err := pg.ParseURL(config.PostgresURL)
 	if err != nil {
@@ -66,18 +88,4 @@ func Start(conf Config) error {
 	}
 
 	return serve()
-}
-
-func setupDatabase() error {
-	log.Print("Preparing Database")
-	opt := &orm.CreateTableOptions{
-		IfNotExists: true,
-	}
-
-	orm.SetTableNameInflector(func(s string) string {
-		return "gitils." + inflection.Plural(s)
-	})
-
-	err := db.CreateTable(new(StoredLyrics), opt)
-	return err
 }
