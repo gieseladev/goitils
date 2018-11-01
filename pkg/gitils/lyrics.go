@@ -8,6 +8,7 @@ import (
 	"github.com/gieseladev/lyricsfindergo/pkg"
 	"github.com/gieseladev/lyricsfindergo/pkg/models"
 	"github.com/go-chi/chi"
+	"github.com/go-pg/pg"
 	"github.com/go-pg/pg/orm"
 	log "github.com/sirupsen/logrus"
 )
@@ -15,7 +16,6 @@ import (
 // TODO: use separate table for query -> url
 
 type StoredLyrics struct {
-	Query       string    `json:"-"`
 	Url         string    `json:"url" sql:",pk"`
 	Title       string    `json:"title"`
 	Artist      string    `json:"artist"`
@@ -25,32 +25,33 @@ type StoredLyrics struct {
 	OriginUrl   string    `json:"source_url"`
 }
 
-func findStoredLyrics(query string) (*StoredLyrics, error) {
-	lyrics := new(StoredLyrics)
+type LyricsQuery struct {
+	Query     string `sql:",unique"`
+	LyricsUrl string `sql:",notnull"`
+	Lyrics    *StoredLyrics
+}
+
+func NewLyricsQuery(query string, lyrics *StoredLyrics) *LyricsQuery {
+	return &LyricsQuery{query, lyrics.Url, lyrics}
+}
+
+func findStoredLyrics(query string) (*LyricsQuery, error) {
+	lyrics := new(LyricsQuery)
 
 	err := db.Model(lyrics).
 		Where("query @@ plainto_tsquery(?)", query).
-		WhereOr("artist || ' ' || title @@ plainto_tsquery(?)", query).
+		Column("Lyrics").
 		Limit(1).
 		Select()
 
 	if err != nil {
-		log.Warningf("Couldn't find stored lyrics: %v", err)
+		if err != pg.ErrNoRows {
+			log.Warningf("Couldn't find stored lyrics: %v", err)
+		}
 		return nil, err
-	} else if *lyrics == (StoredLyrics{}) {
-		return nil, errors.New("no lyrics found in db")
 	}
 
 	return lyrics, nil
-}
-
-func storeLyrics(lyrics *StoredLyrics) {
-	_, err := db.Model(lyrics).
-		OnConflict("(url) DO NOTHING").
-		Insert()
-	if err != nil {
-		log.Warning(err)
-	}
 }
 
 func searchLyrics(searchQuery string) (*StoredLyrics, error) {
@@ -65,7 +66,6 @@ func searchLyrics(searchQuery string) (*StoredLyrics, error) {
 	}
 
 	storedLyrics := new(StoredLyrics)
-	storedLyrics.Query = searchQuery
 
 	storedLyrics.Url = lyrics.Url
 	storedLyrics.Title = lyrics.Title
@@ -80,25 +80,36 @@ func searchLyrics(searchQuery string) (*StoredLyrics, error) {
 	return storedLyrics, nil
 }
 
+func storeLyrics(lyrics *LyricsQuery) {
+	if _, err := db.Model(lyrics.Lyrics).OnConflict("(url) DO NOTHING").Insert(); err != nil {
+		log.Warning(err)
+	}
+
+	if err := db.Insert(lyrics); err != nil {
+		log.Warning(err)
+	}
+}
+
 func getLyrics(w http.ResponseWriter, r *http.Request) {
 	searchQuery := chi.URLParam(r, "query")
 
-	lyrics, err := findStoredLyrics(searchQuery)
+	lyricsQuery, err := findStoredLyrics(searchQuery)
 	if err != nil {
 		log.Debugf("Searching lyrics for: %s", searchQuery)
-		lyrics, err = searchLyrics(searchQuery)
+		lyrics, err := searchLyrics(searchQuery)
 		if err == nil {
-			defer storeLyrics(lyrics)
+			lyricsQuery = NewLyricsQuery(searchQuery, lyrics)
+			defer storeLyrics(lyricsQuery)
 		}
 	}
 
-	if lyrics == nil || *lyrics == (StoredLyrics{}) {
+	if lyricsQuery == nil {
 		log.Warningf("No lyrics found: %v for query: %q", err, searchQuery)
 		SendErrorResponse(w, r, 404, "No lyrics found", nil)
 		return
 	}
 
-	SendJsonResponse(w, r, lyrics)
+	SendJsonResponse(w, r, lyricsQuery.Lyrics)
 }
 
 func CreateLyricsTable() error {
@@ -113,7 +124,11 @@ func CreateLyricsTable() error {
 		return err
 	}
 
-	_, err := db.Exec("CREATE INDEX IF NOT EXISTS query_search ON gitils.stored_lyrics USING GIN (to_tsvector('english', query))")
+	if err := db.CreateTable(new(LyricsQuery), opt); err != nil {
+		return err
+	}
+
+	_, err := db.Exec("CREATE INDEX IF NOT EXISTS query_search ON gitils.lyrics_queries USING GIN (to_tsvector('english', query))")
 
 	return err
 }
