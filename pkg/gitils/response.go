@@ -16,7 +16,7 @@ type JsonResponse struct {
 type ErrorResponse struct {
 	Code    uint16      `json:"code"`
 	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitifempty"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 func NewJsonResponse(w http.ResponseWriter, r *http.Request, payload interface{}) *JsonResponse {
