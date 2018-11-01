@@ -36,16 +36,7 @@ func setupDatabase() error {
 		return "gitils." + inflection.Plural(s)
 	})
 
-	opt := &orm.CreateTableOptions{
-		IfNotExists: true,
-	}
-
-	log.Trace("Creating lyrics table")
-	err := db.CreateTable(new(StoredLyrics), opt)
-
-	if err == nil {
-		_, err = db.Exec("CREATE INDEX IF NOT EXISTS query_search ON gitils.stored_lyrics USING GIN (to_tsvector('english', query))")
-	}
+	err := CreateLyricsTable()
 
 	return err
 }

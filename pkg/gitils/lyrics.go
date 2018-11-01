@@ -8,9 +8,11 @@ import (
 	"github.com/gieseladev/lyricsfindergo/pkg"
 	"github.com/gieseladev/lyricsfindergo/pkg/models"
 	"github.com/go-chi/chi"
-	"github.com/go-chi/render"
+	"github.com/go-pg/pg/orm"
 	log "github.com/sirupsen/logrus"
 )
+
+// TODO: use separate table for query -> url
 
 type StoredLyrics struct {
 	Query       string    `json:"-"`
@@ -85,16 +87,35 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Debugf("Searching lyrics for: %s", searchQuery)
 		lyrics, err = searchLyrics(searchQuery)
-		defer storeLyrics(lyrics)
+		if err == nil {
+			defer storeLyrics(lyrics)
+		}
 	}
 
 	if lyrics == nil || *lyrics == (StoredLyrics{}) {
 		log.Warningf("No lyrics found: %v for query: %q", err, searchQuery)
-		http.Error(w, "No lyrics found", 404)
+		SendErrorResponse(w, r, 404, "No lyrics found", nil)
 		return
 	}
 
-	render.JSON(w, r, lyrics)
+	SendJsonResponse(w, r, lyrics)
+}
+
+func CreateLyricsTable() error {
+	opt := &orm.CreateTableOptions{
+		IfNotExists:   true,
+		FKConstraints: true,
+	}
+
+	log.Trace("Creating lyrics table")
+
+	if err := db.CreateTable(new(StoredLyrics), opt); err != nil {
+		return err
+	}
+
+	_, err := db.Exec("CREATE INDEX IF NOT EXISTS query_search ON gitils.stored_lyrics USING GIN (to_tsvector('english', query))")
+
+	return err
 }
 
 func LyricsRoutes() *chi.Mux {
