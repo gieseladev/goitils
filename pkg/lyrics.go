@@ -13,8 +13,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// TODO: use separate table for query -> url
-
 type StoredLyrics struct {
 	Url         string    `json:"url" sql:",pk"`
 	Title       string    `json:"title"`

@@ -4,7 +4,7 @@ import (
 	"flag"
 	"os"
 
-	"github.com/gieseladev/goitils/pkg/gitils"
+	"github.com/gieseladev/goitils/pkg"
 	"github.com/micro/go-config"
 	"github.com/micro/go-config/source/env"
 	"github.com/micro/go-config/source/file"
